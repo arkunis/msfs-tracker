@@ -9,7 +9,7 @@ export default function Download() {
         Pour voir votre avion sur la carte en temps réel
       </p>
       <a 
-        href="/downloads/MSFS-Companion-Agent.exe"
+        href="/downloads/MSFS-TRACKER.exe"
         className="bg-blue-600 text-white px-8 py-4 rounded-lg"
       >
         📥 Télécharger l'agent (Windows)
