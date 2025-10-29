@@ -58,7 +58,6 @@ export default function LiveMap() {
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            console.log('📨 Message reçu:', data.type, data);
 
             if (data.type === 'all_planes') {
                 const newPlanes = new Map<string, Plane>();
