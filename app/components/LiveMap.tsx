@@ -1,7 +1,13 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
-import L from 'leaflet';
+import dynamic from 'next/dynamic';
+
+// Import du CSS et de la config - ces imports ne causent pas de problème car ils sont dans des fichiers séparés
 import 'leaflet/dist/leaflet.css';
+import '../utils/leafletConfig';
+
+// Importer Leaflet dynamiquement pour éviter l'erreur "window is not defined"
+let L: any;
 
 interface Plane {
     userId: string;
@@ -21,10 +27,10 @@ interface PlaneTrail {
 
 export default function LiveMap() {
     const mapContainer = useRef<HTMLDivElement>(null);
-    const map = useRef<L.Map | null>(null);
+    const map = useRef<any>(null);
     const [planes, setPlanes] = useState<Map<string, Plane>>(new Map());
-    const markers = useRef<Map<string, L.Marker>>(new Map());
-    const trails = useRef<Map<string, L.Polyline>>(new Map());
+    const markers = useRef<Map<string, any>>(new Map());
+    const trails = useRef<Map<string, any>>(new Map());
     const positionHistory = useRef<Map<string, [number, number][]>>(new Map());
     const [connected, setConnected] = useState(false);
     const [playerCount, setPlayerCount] = useState(0);
@@ -34,84 +40,94 @@ export default function LiveMap() {
     const radToDeg = (rad: number) => rad * (180 / Math.PI);
 
     useEffect(() => {
-        if (map.current || !mapContainer.current) return;
+        // Importer Leaflet côté client uniquement
+        const initMap = async () => {
+            if (map.current || !mapContainer.current) return;
 
-        // Initialiser la carte Leaflet
-        map.current = L.map(mapContainer.current, {
-            center: [48.8566, 2.3522],
-            zoom: 5,
-            zoomControl: false,
-            maxBounds: [[-90, -180], [90, 180]],
-            maxBoundsViscosity: 1.0,
-            minZoom: 3,
-            worldCopyJump: false
-        });
+            // Charger Leaflet dynamiquement
+            L = (await import('leaflet')).default;
 
-        // Ajouter les tuiles OpenStreetMap
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap, &copy; CARTO',
-            maxZoom: 19,
-            noWrap: true
-        }).addTo(map.current);
+            // Initialiser la carte Leaflet
+            map.current = L.map(mapContainer.current, {
+                center: [48.8566, 2.3522],
+                zoom: 5,
+                zoomControl: false,
+                maxBounds: [[-90, -180], [90, 180]],
+                maxBoundsViscosity: 1.0,
+                minZoom: 3,
+                worldCopyJump: false
+            });
 
-        setMapLoaded(true);
-        console.log('🗺️ Map loaded');
+            // Ajouter les tuiles OpenStreetMap avec thème sombre
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap, &copy; CARTO',
+                maxZoom: 19,
+                noWrap: true
+            }).addTo(map.current);
 
-        const ws = new WebSocket('wss://msfs-backend-production.up.railway.app');
-        ws.onopen = () => {
-            console.log('✅ Connected to server');
-            setConnected(true);
-            ws.send(JSON.stringify({ type: 'web_connect' }));
-        };
+            setMapLoaded(true);
+            console.log('🗺️ Map loaded');
 
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+            // Connexion WebSocket
+            const ws = new WebSocket('wss://msfs-backend-production.up.railway.app');
+            ws.onopen = () => {
+                console.log('✅ Connected to server');
+                setConnected(true);
+                ws.send(JSON.stringify({ type: 'web_connect' }));
+            };
 
-            if (data.type === 'all_planes') {
-                const newPlanes = new Map<string, Plane>();
-                data.planes.forEach((raw: any) => {
-                    const plane = flattenPlane(raw);
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'all_planes') {
+                    const newPlanes = new Map<string, Plane>();
+                    data.planes.forEach((raw: any) => {
+                        const plane = flattenPlane(raw);
+                        if (plane.latitude !== 0 && plane.longitude !== 0) {
+                            newPlanes.set(plane.userId, plane);
+                        }
+                    });
+                    setPlanes(newPlanes);
+                    setPlayerCount(newPlanes.size);
+                }
+
+                if (data.type === 'plane_update') {
+                    const plane = flattenPlane({ userId: data.userId, username: data.username, data: data.data });
                     if (plane.latitude !== 0 && plane.longitude !== 0) {
-                        newPlanes.set(plane.userId, plane);
+                        setPlanes(prev => {
+                            const updated = new Map(prev);
+                            updated.set(plane.userId, plane);
+                            setPlayerCount(updated.size);
+                            return updated;
+                        });
                     }
-                });
-                setPlanes(newPlanes);
-                setPlayerCount(newPlanes.size);
-            }
+                }
 
-            if (data.type === 'plane_update') {
-                const plane = flattenPlane({ userId: data.userId, username: data.username, data: data.data });
-                if (plane.latitude !== 0 && plane.longitude !== 0) {
+                if (data.type === 'plane_disconnected') {
                     setPlanes(prev => {
                         const updated = new Map(prev);
-                        updated.set(plane.userId, plane);
+                        updated.delete(data.userId);
                         setPlayerCount(updated.size);
                         return updated;
                     });
+                    removeMarker(data.userId);
+                    removeTrail(data.userId);
                 }
-            }
+            };
 
-            if (data.type === 'plane_disconnected') {
-                setPlanes(prev => {
-                    const updated = new Map(prev);
-                    updated.delete(data.userId);
-                    setPlayerCount(updated.size);
-                    return updated;
-                });
-                removeMarker(data.userId);
-                removeTrail(data.userId);
-            }
+            ws.onclose = () => {
+                console.log('❌ Disconnected');
+                setConnected(false);
+            };
+
+            return () => {
+                ws.close();
+                map.current?.remove();
+            };
         };
 
-        ws.onclose = () => {
-            console.log('❌ Disconnected');
-            setConnected(false);
-        };
+        initMap();
 
-        return () => {
-            ws.close();
-            map.current?.remove();
-        };
     }, []);
 
     // Mise à jour des markers et trails après que la carte soit chargée
