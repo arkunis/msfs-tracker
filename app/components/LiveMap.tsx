@@ -1,10 +1,5 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
-import dynamic from 'next/dynamic';
-
-// Import du CSS et de la config - ces imports ne causent pas de problème car ils sont dans des fichiers séparés
-import 'leaflet/dist/leaflet.css';
-import '../utils/leafletConfig';
 
 // Importer Leaflet dynamiquement pour éviter l'erreur "window is not defined"
 let L: any;
@@ -44,8 +39,23 @@ export default function LiveMap() {
         const initMap = async () => {
             if (map.current || !mapContainer.current) return;
 
+            // Charger le CSS de Leaflet dynamiquement
+            if (typeof window !== 'undefined') {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                document.head.appendChild(link);
+            }
+
             // Charger Leaflet dynamiquement
             L = (await import('leaflet')).default;
+            
+            // Charger la config Leaflet si elle existe
+            try {
+                await import('../utils/leafletConfig');
+            } catch (e) {
+                console.log('No leafletConfig found, skipping...');
+            }
 
             // Initialiser la carte Leaflet
             map.current = L.map(mapContainer.current, {
