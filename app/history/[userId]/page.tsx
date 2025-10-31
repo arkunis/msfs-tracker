@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import '../../utils/leafletConfig';
+import { findNearestAirport, type Airport } from '../../data/Airports';
 
 interface FlightTrack {
     id: string;
@@ -22,11 +23,12 @@ interface FlightSession {
     startTime: string;
     endTime: string;
     aircraft: string;
+    distance: number;
 }
 
 export default function FlightHistory() {
     const params = useParams();
-    const userId = params.userId as string; // UUID depuis l'URL
+    const userId = params.userId as string;
     
     const [tracks, setTracks] = useState<FlightTrack[]>([]);
     const [sessions, setSessions] = useState<FlightSession[]>([]);
@@ -34,14 +36,132 @@ export default function FlightHistory() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string>('');
     const [username, setUsername] = useState<string>('');
+    const [showShareModal, setShowShareModal] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [tracksPerPage] = useState(10);
+    const [sessionLocations, setSessionLocations] = useState<Map<number, { departure: string; arrival: string }>>(new Map());
 
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+
+    const getAirportFromPosition = (lat: number, lon: number, altitude: number): string => {
+
+        let maxDistance = 100;
+        if (altitude < 500) {
+            maxDistance = 15;
+        } else if (altitude < 5000) {
+            maxDistance = 50;
+        }
+        
+        const airport = findNearestAirport(lat, lon, maxDistance);
+        
+        if (airport) {
+            return `${airport.icao} (${airport.city})`;
+        }
+        
+        return `${lat.toFixed(3)}°, ${lon.toFixed(3)}°`;
+    };
+
+
+    const loadSessionLocation = (sessionIndex: number, session: FlightSession) => {
+
+        if (sessionLocations.has(sessionIndex)) {
+            return;
+        }
+
+        let departureTrack = session.tracks[session.tracks.length - 1];
+        
+        for (let i = session.tracks.length - 1; i >= 0; i--) {
+            const track = session.tracks[i];
+            if (track.altitude < 100 && track.speed < 20) {
+                departureTrack = track;
+                break;
+            }
+        }
+        
+        if (departureTrack === session.tracks[session.tracks.length - 1]) {
+            for (let i = session.tracks.length - 1; i >= 0; i--) {
+                const track = session.tracks[i];
+                if (track.altitude < 500 && track.speed < 50) {
+                    departureTrack = track;
+                    break;
+                }
+            }
+        }
+
+        let arrivalTrack = session.tracks[0];
+        
+        for (let i = 0; i < session.tracks.length; i++) {
+            const track = session.tracks[i];
+            if (track.altitude < 100 && track.speed < 20) {
+                arrivalTrack = track;
+                break;
+            }
+        }
+        
+        if (arrivalTrack === session.tracks[0]) {
+            for (let i = 0; i < session.tracks.length; i++) {
+                const track = session.tracks[i];
+                if (track.altitude < 500 && track.speed < 50) {
+                    arrivalTrack = track;
+                    break;
+                }
+            }
+        }
+
+        const [depLat, depLon] = toLatLng(departureTrack);
+        const [arrLat, arrLon] = toLatLng(arrivalTrack);
+
+        console.log(`Session ${sessionIndex}:`);
+        console.log(`  Départ: ${depLat.toFixed(4)}, ${depLon.toFixed(4)} - Alt: ${departureTrack.altitude}ft, Speed: ${departureTrack.speed}kts`);
+        console.log(`  Arrivée: ${arrLat.toFixed(4)}, ${arrLon.toFixed(4)} - Alt: ${arrivalTrack.altitude}ft, Speed: ${arrivalTrack.speed}kts`);
+
+        const departure = getAirportFromPosition(depLat, depLon, departureTrack.altitude);
+        const arrival = getAirportFromPosition(arrLat, arrLon, arrivalTrack.altitude);
+
+        console.log(`  Détecté: ${departure} → ${arrival}`);
+
+        setSessionLocations(prev => new Map(prev).set(sessionIndex, { departure, arrival }));
+    };
 
     useEffect(() => {
         if (userId) {
             loadTracks(userId);
         }
     }, [userId]);
+
+    useEffect(() => {
+
+        if (typeof window !== 'undefined') {
+            const params = new URLSearchParams(window.location.search);
+            const sessionParam = params.get('session');
+            if (sessionParam && sessions.length > 0) {
+                const sessionIndex = parseInt(sessionParam, 10);
+                if (sessionIndex >= 0 && sessionIndex < sessions.length) {
+                    setSelectedSessionIndex(sessionIndex);
+                }
+            }
+        }
+
+        sessions.forEach((session, index) => {
+            loadSessionLocation(index, session);
+        });
+    }, [sessions]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [selectedSessionIndex]);
+
+    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+        const R = 6371;
+        const dLat = lat2 - lat1;
+        const dLon = lon2 - lon1;
+        const a = 
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1) * Math.cos(lat2) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    };
 
     const segmentFlights = (tracks: FlightTrack[]): FlightSession[] => {
         if (tracks.length === 0) return [];
@@ -63,11 +183,22 @@ export default function FlightHistory() {
             const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111000;
 
             if (timeDiff > MAX_TIME_GAP || distance > MAX_DISTANCE) {
+                let totalDistance = 0;
+                for (let j = 0; j < currentSession.length - 1; j++) {
+                    totalDistance += calculateDistance(
+                        currentSession[j].latitude,
+                        currentSession[j].longitude,
+                        currentSession[j + 1].latitude,
+                        currentSession[j + 1].longitude
+                    );
+                }
+
                 sessions.push({
                     tracks: currentSession,
                     startTime: currentSession[currentSession.length - 1].timestamp,
                     endTime: currentSession[0].timestamp,
-                    aircraft: currentSession[0].aircraft
+                    aircraft: currentSession[0].aircraft,
+                    distance: totalDistance
                 });
                 currentSession = [curr];
             } else {
@@ -76,11 +207,22 @@ export default function FlightHistory() {
         }
 
         if (currentSession.length > 0) {
+            let totalDistance = 0;
+            for (let j = 0; j < currentSession.length - 1; j++) {
+                totalDistance += calculateDistance(
+                    currentSession[j].latitude,
+                    currentSession[j].longitude,
+                    currentSession[j + 1].latitude,
+                    currentSession[j + 1].longitude
+                );
+            }
+
             sessions.push({
                 tracks: currentSession,
                 startTime: currentSession[currentSession.length - 1].timestamp,
                 endTime: currentSession[0].timestamp,
-                aircraft: currentSession[0].aircraft
+                aircraft: currentSession[0].aircraft,
+                distance: totalDistance
             });
         }
 
@@ -105,7 +247,6 @@ export default function FlightHistory() {
             const data = await response.json();
             setTracks(data);
             
-            // Extraire le username depuis les données (si disponible)
             if (data.length > 0) {
                 setUsername(`Pilot_${uid.slice(0, 8)}`);
             }
@@ -148,6 +289,10 @@ export default function FlightHistory() {
         return `${Math.round(speed)} kts`;
     };
 
+    const formatDistance = (km: number) => {
+        return `${km.toFixed(1)} km`;
+    };
+
     const formatDuration = (start: string, end: string) => {
         const diff = new Date(end).getTime() - new Date(start).getTime();
         const minutes = Math.floor(diff / 60000);
@@ -156,22 +301,44 @@ export default function FlightHistory() {
         return hours > 0 ? `${hours}h ${mins}min` : `${mins}min`;
     };
 
-    // Copier le lien dans le presse-papier
     const copyLink = () => {
         const url = window.location.href;
         navigator.clipboard.writeText(url);
-        alert('Lien copié dans le presse-papier !');
+        setShowShareModal(true);
+        setTimeout(() => setShowShareModal(false), 2000);
+    };
+
+    const shareSession = (sessionIndex: number) => {
+        const baseUrl = window.location.origin + window.location.pathname;
+        const url = `${baseUrl}?session=${sessionIndex}`;
+        navigator.clipboard.writeText(url);
+        setShowShareModal(true);
+        setTimeout(() => setShowShareModal(false), 2000);
     };
 
     return (
         <div className="min-h-screen bg-gray-900 text-white p-8">
             <div className="max-w-7xl mx-auto">
-                {/* Header avec username et bouton partage */}
+                {/* Modal de confirmation de partage */}
+                {showShareModal && (
+                    <div className="fixed top-4 right-4 bg-green-600 px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in">
+                        ✅ Lien copié dans le presse-papier !
+                    </div>
+                )}
+
+                {/* Header */}
                 <div className="flex justify-between items-center mb-8">
                     <div>
                         <h1 className="text-4xl font-bold">📊 Historique des vols</h1>
                         {username && (
                             <p className="text-gray-400 mt-2">👤 {username}</p>
+                        )}
+                        {currentSession && sessionLocations.get(selectedSessionIndex) && (
+                            <p className="text-xl mt-3">
+                                <span className="text-green-400">🛫 {sessionLocations.get(selectedSessionIndex)?.departure}</span>
+                                {' → '}
+                                <span className="text-red-400">🛬 {sessionLocations.get(selectedSessionIndex)?.arrival}</span>
+                            </p>
                         )}
                     </div>
                     <button
@@ -189,37 +356,73 @@ export default function FlightHistory() {
                             📅 Sessions de vol ({sessions.length}):
                         </label>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {sessions.map((session, index) => (
-                                <button
-                                    key={index}
-                                    onClick={() => setSelectedSessionIndex(index)}
-                                    className={`p-4 rounded-lg border-2 transition-all text-left ${
-                                        selectedSessionIndex === index
-                                            ? 'border-blue-500 bg-blue-900'
-                                            : 'border-gray-600 bg-gray-700 hover:bg-gray-600'
-                                    }`}
-                                >
-                                    <div className="font-bold text-lg mb-2">Vol #{sessions.length - index}</div>
-                                    <div className="text-sm text-gray-300">
-                                        🕒 {formatDate(session.startTime)}
+                            {sessions.map((session, index) => {
+                                const location = sessionLocations.get(index);
+                                const flightTitle = location 
+                                    ? `${location.departure} ✈️ ${location.arrival}`
+                                    : `Vol #${sessions.length - index}`;
+                                
+                                return (
+                                    <div
+                                        key={index}
+                                        className={`p-4 rounded-lg border-2 transition-all ${
+                                            selectedSessionIndex === index
+                                                ? 'border-blue-500 bg-blue-900'
+                                                : 'border-gray-600 bg-gray-700'
+                                        }`}
+                                    >
+                                        <button
+                                            onClick={() => setSelectedSessionIndex(index)}
+                                            className="w-full text-left"
+                                        >
+                                            <div className="font-bold text-lg mb-2 truncate" title={flightTitle}>
+                                                {location ? (
+                                                    <>
+                                                        <span className="text-green-400">🛫 {location.departure}</span>
+                                                        {' → '}
+                                                        <span className="text-red-400">🛬 {location.arrival}</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Vol #{sessions.length - index}
+                                                        <span className="text-gray-400 text-sm ml-2">(Chargement...)</span>
+                                                    </>
+                                                )}
+                                            </div>
+                                            <div className="text-sm text-gray-300">
+                                                🕒 {formatDate(session.startTime)}
+                                            </div>
+                                            <div className="text-sm text-gray-300">
+                                                ⏱️ Durée: {formatDuration(session.startTime, session.endTime)}
+                                            </div>
+                                            <div className="text-sm text-gray-300">
+                                                ✈️ {session.aircraft}
+                                            </div>
+                                            <div className="text-sm text-gray-300">
+                                                📏 Distance: {formatDistance(session.distance)}
+                                            </div>
+                                            <div className="text-sm text-gray-300">
+                                                📍 {session.tracks.length} points
+                                            </div>
+                                        </button>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                shareSession(index);
+                                            }}
+                                            className="mt-3 w-full bg-gray-600 hover:bg-gray-500 px-3 py-2 rounded text-sm transition-colors"
+                                        >
+                                            📤 Partager ce vol
+                                        </button>
                                     </div>
-                                    <div className="text-sm text-gray-300">
-                                        ⏱️ Durée: {formatDuration(session.startTime, session.endTime)}
-                                    </div>
-                                    <div className="text-sm text-gray-300">
-                                        ✈️ {session.aircraft}
-                                    </div>
-                                    <div className="text-sm text-gray-300">
-                                        📍 {session.tracks.length} points
-                                    </div>
-                                </button>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 )}
 
                 {/* Stats */}
-                {sessionTracks.length > 0 && (
+                {sessionTracks.length > 0 && currentSession && (
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
                         <div className="bg-blue-600 rounded-lg p-6">
                             <div className="text-3xl font-bold">{sessionTracks.length}</div>
@@ -237,9 +440,9 @@ export default function FlightHistory() {
                             </div>
                             <div className="text-purple-200">Vitesse max</div>
                         </div>
-                        <div className="bg-orange-600 rounded-lg p-6">
-                            <div className="text-3xl font-bold">{currentSession?.aircraft || 'N/A'}</div>
-                            <div className="text-orange-200">Avion</div>
+                        <div className="bg-cyan-600 rounded-lg p-6">
+                            <div className="text-3xl font-bold">{formatDistance(currentSession.distance)}</div>
+                            <div className="text-cyan-200">Distance parcourue</div>
                         </div>
                     </div>
                 )}
@@ -307,8 +510,11 @@ export default function FlightHistory() {
                 {/* Liste détaillée */}
                 {sessionTracks.length > 0 && (
                     <div className="mt-8 bg-gray-800 rounded-lg overflow-hidden">
-                        <div className="p-6 border-b border-gray-700">
+                        <div className="p-6 border-b border-gray-700 flex justify-between items-center">
                             <h2 className="text-2xl font-bold">📋 Détails du vol</h2>
+                            <div className="text-sm text-gray-400">
+                                {sessionTracks.length} points au total
+                            </div>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="w-full">
@@ -323,24 +529,64 @@ export default function FlightHistory() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {sessionTracks.slice(0, 50).map((track, index) => (
-                                        <tr key={track.id} className={index % 2 === 0 ? 'bg-gray-800' : 'bg-gray-750'}>
-                                            <td className="px-6 py-4">{formatDate(track.timestamp)}</td>
-                                            <td className="px-6 py-4">
-                                                {toLatLng(track)[0].toFixed(4)}°N, {toLatLng(track)[1].toFixed(4)}°E
-                                            </td>
-                                            <td className="px-6 py-4">{formatAltitude(track.altitude)}</td>
-                                            <td className="px-6 py-4">{formatSpeed(track.speed)}</td>
-                                            <td className="px-6 py-4">{Math.round(track.heading * (180 / Math.PI))}°</td>
-                                            <td className="px-6 py-4">{track.aircraft}</td>
-                                        </tr>
-                                    ))}
+                                    {sessionTracks
+                                        .slice((currentPage - 1) * tracksPerPage, currentPage * tracksPerPage)
+                                        .map((track, index) => (
+                                            <tr key={track.id} className={index % 2 === 0 ? 'bg-gray-800' : 'bg-gray-750'}>
+                                                <td className="px-6 py-4">{formatDate(track.timestamp)}</td>
+                                                <td className="px-6 py-4">
+                                                    {toLatLng(track)[0].toFixed(4)}°N, {toLatLng(track)[1].toFixed(4)}°E
+                                                </td>
+                                                <td className="px-6 py-4">{formatAltitude(track.altitude)}</td>
+                                                <td className="px-6 py-4">{formatSpeed(track.speed)}</td>
+                                                <td className="px-6 py-4">{Math.round(track.heading * (180 / Math.PI))}°</td>
+                                                <td className="px-6 py-4">{track.aircraft}</td>
+                                            </tr>
+                                        ))
+                                    }
                                 </tbody>
                             </table>
                         </div>
-                        {sessionTracks.length > 50 && (
-                            <div className="p-4 text-center text-gray-400">
-                                Affichage des 50 derniers points sur {sessionTracks.length}
+                        
+                        {/* Pagination */}
+                        {sessionTracks.length > tracksPerPage && (
+                            <div className="p-4 border-t border-gray-700 flex justify-between items-center">
+                                <div className="text-gray-400 text-sm">
+                                    Affichage de {(currentPage - 1) * tracksPerPage + 1} à {Math.min(currentPage * tracksPerPage, sessionTracks.length)} sur {sessionTracks.length} points
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setCurrentPage(1)}
+                                        disabled={currentPage === 1}
+                                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded transition-colors"
+                                    >
+                                        ⏮️ Début
+                                    </button>
+                                    <button
+                                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                                        disabled={currentPage === 1}
+                                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded transition-colors"
+                                    >
+                                        ◀️ Précédent
+                                    </button>
+                                    <div className="px-4 py-2 bg-blue-600 rounded">
+                                        Page {currentPage} / {Math.ceil(sessionTracks.length / tracksPerPage)}
+                                    </div>
+                                    <button
+                                        onClick={() => setCurrentPage(prev => Math.min(Math.ceil(sessionTracks.length / tracksPerPage), prev + 1))}
+                                        disabled={currentPage >= Math.ceil(sessionTracks.length / tracksPerPage)}
+                                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded transition-colors"
+                                    >
+                                        Suivant ▶️
+                                    </button>
+                                    <button
+                                        onClick={() => setCurrentPage(Math.ceil(sessionTracks.length / tracksPerPage))}
+                                        disabled={currentPage >= Math.ceil(sessionTracks.length / tracksPerPage)}
+                                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded transition-colors"
+                                    >
+                                        Fin ⏭️
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>
