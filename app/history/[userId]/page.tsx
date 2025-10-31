@@ -29,7 +29,7 @@ interface FlightSession {
 export default function FlightHistory() {
     const params = useParams();
     const userId = params.userId as string;
-    
+
     const [tracks, setTracks] = useState<FlightTrack[]>([]);
     const [sessions, setSessions] = useState<FlightSession[]>([]);
     const [selectedSessionIndex, setSelectedSessionIndex] = useState<number>(0);
@@ -44,32 +44,29 @@ export default function FlightHistory() {
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
     const getAirportFromPosition = (lat: number, lon: number, altitude: number): string => {
-
         let maxDistance = 100;
         if (altitude < 500) {
             maxDistance = 15;
         } else if (altitude < 5000) {
             maxDistance = 50;
         }
-        
+
         const airport = findNearestAirport(lat, lon, maxDistance);
-        
+
         if (airport) {
             return `${airport.icao} (${airport.city})`;
         }
-        
+
         return `${lat.toFixed(3)}°, ${lon.toFixed(3)}°`;
     };
 
-
     const loadSessionLocation = (sessionIndex: number, session: FlightSession) => {
-
         if (sessionLocations.has(sessionIndex)) {
             return;
         }
 
         let departureTrack = session.tracks[session.tracks.length - 1];
-        
+
         for (let i = session.tracks.length - 1; i >= 0; i--) {
             const track = session.tracks[i];
             if (track.altitude < 100 && track.speed < 20) {
@@ -77,7 +74,7 @@ export default function FlightHistory() {
                 break;
             }
         }
-        
+
         if (departureTrack === session.tracks[session.tracks.length - 1]) {
             for (let i = session.tracks.length - 1; i >= 0; i--) {
                 const track = session.tracks[i];
@@ -89,7 +86,7 @@ export default function FlightHistory() {
         }
 
         let arrivalTrack = session.tracks[0];
-        
+
         for (let i = 0; i < session.tracks.length; i++) {
             const track = session.tracks[i];
             if (track.altitude < 100 && track.speed < 20) {
@@ -97,7 +94,7 @@ export default function FlightHistory() {
                 break;
             }
         }
-        
+
         if (arrivalTrack === session.tracks[0]) {
             for (let i = 0; i < session.tracks.length; i++) {
                 const track = session.tracks[i];
@@ -111,14 +108,8 @@ export default function FlightHistory() {
         const [depLat, depLon] = toLatLng(departureTrack);
         const [arrLat, arrLon] = toLatLng(arrivalTrack);
 
-        console.log(`Session ${sessionIndex}:`);
-        console.log(`  Départ: ${depLat.toFixed(4)}, ${depLon.toFixed(4)} - Alt: ${departureTrack.altitude}ft, Speed: ${departureTrack.speed}kts`);
-        console.log(`  Arrivée: ${arrLat.toFixed(4)}, ${arrLon.toFixed(4)} - Alt: ${arrivalTrack.altitude}ft, Speed: ${arrivalTrack.speed}kts`);
-
         const departure = getAirportFromPosition(depLat, depLon, departureTrack.altitude);
         const arrival = getAirportFromPosition(arrLat, arrLon, arrivalTrack.altitude);
-
-        console.log(`  Détecté: ${departure} → ${arrival}`);
 
         setSessionLocations(prev => new Map(prev).set(sessionIndex, { departure, arrival }));
     };
@@ -130,7 +121,6 @@ export default function FlightHistory() {
     }, [userId]);
 
     useEffect(() => {
-
         if (typeof window !== 'undefined') {
             const params = new URLSearchParams(window.location.search);
             const sessionParam = params.get('session');
@@ -152,12 +142,12 @@ export default function FlightHistory() {
     }, [selectedSessionIndex]);
 
     const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-        const R = 6371;
-        const dLat = lat2 - lat1;
-        const dLon = lon2 - lon1;
-        const a = 
+        const R = 6371; // Rayon de la Terre en km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a =
             Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1) * Math.cos(lat2) *
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
             Math.sin(dLon / 2) * Math.sin(dLon / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
@@ -168,52 +158,88 @@ export default function FlightHistory() {
 
         const sessions: FlightSession[] = [];
         let currentSession: FlightTrack[] = [tracks[0]];
-        
-        const MAX_TIME_GAP = 5 * 60 * 1000; // 5 minutes
-        const MAX_DISTANCE = 100000; // 100km
+
+        // Paramètres de détection de nouvelle session
+        const MAX_TIME_GAP = 10 * 60 * 1000; // 10 minutes (augmenté)
+        const MAX_TELEPORT_DISTANCE = 50; // 50km - détecte les "téléportations" entre vols
 
         for (let i = 1; i < tracks.length; i++) {
             const prev = tracks[i - 1];
             const curr = tracks[i];
-            
-            const timeDiff = new Date(prev.timestamp).getTime() - new Date(curr.timestamp).getTime();
-            
-            const latDiff = Math.abs(prev.latitude - curr.latitude);
-            const lonDiff = Math.abs(prev.longitude - curr.longitude);
-            const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111000;
 
-            if (timeDiff > MAX_TIME_GAP || distance > MAX_DISTANCE) {
-                let totalDistance = 0;
-                for (let j = 0; j < currentSession.length - 1; j++) {
-                    totalDistance += calculateDistance(
-                        currentSession[j].latitude,
-                        currentSession[j].longitude,
-                        currentSession[j + 1].latitude,
-                        currentSession[j + 1].longitude
-                    );
+            // Calculer l'écart de temps
+            const timeDiff = new Date(prev.timestamp).getTime() - new Date(curr.timestamp).getTime();
+
+            // Convertir les coordonnées en lat/lon pour calcul précis
+            const prevLat = prev.latitude * (180 / Math.PI);
+            const prevLon = prev.longitude * (180 / Math.PI);
+            const currLat = curr.latitude * (180 / Math.PI);
+            const currLon = curr.longitude * (180 / Math.PI);
+
+            // Calculer la distance réelle en km
+            const distance = calculateDistance(prevLat, prevLon, currLat, currLon);
+
+            // Déterminer si c'est une nouvelle session
+            let isNewSession = false;
+
+            // 1. Écart de temps trop important
+            if (timeDiff > MAX_TIME_GAP) {
+                isNewSession = true;
+            }
+
+            // 2. "Téléportation" - distance trop grande entre deux points consécutifs
+            // (indique un changement de lieu de départ)
+            if (distance > MAX_TELEPORT_DISTANCE) {
+                isNewSession = true;
+            }
+
+            // 3. Changement d'avion
+            if (prev.aircraft !== curr.aircraft) {
+                isNewSession = true;
+            }
+
+            if (isNewSession) {
+                // Sauvegarder la session actuelle
+                if (currentSession.length > 1) { // Au moins 2 points pour faire un vol
+                    let totalDistance = 0;
+                    for (let j = 0; j < currentSession.length - 1; j++) {
+                        const t1 = currentSession[j];
+                        const t2 = currentSession[j + 1];
+                        totalDistance += calculateDistance(
+                            t1.latitude * (180 / Math.PI),
+                            t1.longitude * (180 / Math.PI),
+                            t2.latitude * (180 / Math.PI),
+                            t2.longitude * (180 / Math.PI)
+                        );
+                    }
+
+                    sessions.push({
+                        tracks: currentSession,
+                        startTime: currentSession[currentSession.length - 1].timestamp,
+                        endTime: currentSession[0].timestamp,
+                        aircraft: currentSession[0].aircraft,
+                        distance: totalDistance
+                    });
                 }
 
-                sessions.push({
-                    tracks: currentSession,
-                    startTime: currentSession[currentSession.length - 1].timestamp,
-                    endTime: currentSession[0].timestamp,
-                    aircraft: currentSession[0].aircraft,
-                    distance: totalDistance
-                });
+                // Démarrer une nouvelle session
                 currentSession = [curr];
             } else {
                 currentSession.push(curr);
             }
         }
 
-        if (currentSession.length > 0) {
+        // Ajouter la dernière session
+        if (currentSession.length > 1) {
             let totalDistance = 0;
             for (let j = 0; j < currentSession.length - 1; j++) {
+                const t1 = currentSession[j];
+                const t2 = currentSession[j + 1];
                 totalDistance += calculateDistance(
-                    currentSession[j].latitude,
-                    currentSession[j].longitude,
-                    currentSession[j + 1].latitude,
-                    currentSession[j + 1].longitude
+                    t1.latitude * (180 / Math.PI),
+                    t1.longitude * (180 / Math.PI),
+                    t2.latitude * (180 / Math.PI),
+                    t2.longitude * (180 / Math.PI)
                 );
             }
 
@@ -224,6 +250,7 @@ export default function FlightHistory() {
                 aircraft: currentSession[0].aircraft,
                 distance: totalDistance
             });
+
         }
 
         return sessions;
@@ -246,11 +273,11 @@ export default function FlightHistory() {
 
             const data = await response.json();
             setTracks(data);
-            
+
             if (data.length > 0) {
                 setUsername(`Pilot_${uid.slice(0, 8)}`);
             }
-            
+
             const flightSessions = segmentFlights(data);
             setSessions(flightSessions);
             setSelectedSessionIndex(0);
@@ -358,18 +385,17 @@ export default function FlightHistory() {
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {sessions.map((session, index) => {
                                 const location = sessionLocations.get(index);
-                                const flightTitle = location 
+                                const flightTitle = location
                                     ? `${location.departure} ✈️ ${location.arrival}`
                                     : `Vol #${sessions.length - index}`;
-                                
+
                                 return (
                                     <div
                                         key={index}
-                                        className={`p-4 rounded-lg border-2 transition-all ${
-                                            selectedSessionIndex === index
+                                        className={`p-4 rounded-lg border-2 transition-all ${selectedSessionIndex === index
                                                 ? 'border-blue-500 bg-blue-900'
                                                 : 'border-gray-600 bg-gray-700'
-                                        }`}
+                                            }`}
                                     >
                                         <button
                                             onClick={() => setSelectedSessionIndex(index)}
@@ -547,7 +573,7 @@ export default function FlightHistory() {
                                 </tbody>
                             </table>
                         </div>
-                        
+
                         {/* Pagination */}
                         {sessionTracks.length > tracksPerPage && (
                             <div className="p-4 border-t border-gray-700 flex justify-between items-center">

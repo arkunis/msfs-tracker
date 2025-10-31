@@ -60,13 +60,11 @@ export default function LiveMap() {
     // Charger les timestamps RainViewer
     const loadRainViewerTimestamps = async () => {
         try {
-            console.log('🌧️ Chargement des données RainViewer...');
             const response = await fetch('https://api.rainviewer.com/public/weather-maps.json');
             const data = await response.json();
 
             // Combiner passé et prévision courte (nowcast)
             const timestamps = data.radar.past.concat(data.radar.nowcast);
-            console.log('✅ RainViewer timestamps chargés:', timestamps.length, 'frames');
             setRainViewerTimestamps(timestamps);
             setAnimationPosition(0);
 
@@ -364,11 +362,9 @@ export default function LiveMap() {
             }).addTo(map.current);
 
             setMapLoaded(true);
-            console.log('🗺️ Map loaded');
 
             const ws = new WebSocket('wss://msfs-backend-production.up.railway.app');
             ws.onopen = () => {
-                console.log('✅ Connected to server');
                 setConnected(true);
                 ws.send(JSON.stringify({ type: 'web_connect' }));
             };
@@ -413,7 +409,6 @@ export default function LiveMap() {
             };
 
             ws.onclose = () => {
-                console.log('❌ Disconnected');
                 setConnected(false);
             };
 
