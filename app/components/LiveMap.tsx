@@ -55,16 +55,21 @@ export default function LiveMap() {
     const [rainViewerTimestamps, setRainViewerTimestamps] = useState<any[]>([]);
     const animationTimer = useRef<any>(null);
 
+    // États pour mobile
+    const [showControls, setShowControls] = useState(false);
+    const [showPilotsList, setShowPilotsList] = useState(false);
+
     const radToDeg = (rad: number) => rad * (180 / Math.PI);
 
     // Charger les timestamps RainViewer
     const loadRainViewerTimestamps = async () => {
         try {
+            console.log('🌧️ Chargement des données RainViewer...');
             const response = await fetch('https://api.rainviewer.com/public/weather-maps.json');
             const data = await response.json();
 
-            // Combiner passé et prévision courte (nowcast)
             const timestamps = data.radar.past.concat(data.radar.nowcast);
+            console.log('✅ RainViewer timestamps chargés:', timestamps.length, 'frames');
             setRainViewerTimestamps(timestamps);
             setAnimationPosition(0);
 
@@ -79,13 +84,11 @@ export default function LiveMap() {
     const updateRainViewerLayer = () => {
         if (!map.current || !rainViewerEnabled || rainViewerTimestamps.length === 0) return;
 
-        // Retirer les anciennes couches
         rainViewerLayers.current.forEach(layer => {
             map.current.removeLayer(layer);
         });
         rainViewerLayers.current = [];
 
-        // Ajouter la nouvelle couche avec le timestamp actuel
         const timestamp = rainViewerTimestamps[animationPosition].time;
 
         const layer = L.tileLayer(
@@ -249,6 +252,14 @@ export default function LiveMap() {
         setWeatherData(new Map());
     };
 
+    // Désactiver RainViewer quand la météo est désactivée
+    useEffect(() => {
+        if (!weatherEnabled) {
+            setRainViewerEnabled(false);
+            setShowWindMarkers(false);
+        }
+    }, [weatherEnabled]);
+
     // Charger les timestamps RainViewer au démarrage
     useEffect(() => {
         if (!rainViewerEnabled || !mapLoaded) {
@@ -262,7 +273,6 @@ export default function LiveMap() {
 
         loadRainViewerTimestamps();
 
-        // Rafraîchir les timestamps toutes les 10 minutes
         const refreshInterval = setInterval(loadRainViewerTimestamps, 600000);
 
         return () => {
@@ -285,7 +295,6 @@ export default function LiveMap() {
             clearInterval(animationTimer.current);
         }
 
-        // Animation toutes les 30 secondes
         animationTimer.current = setInterval(() => {
             setAnimationPosition((prev) => (prev + 1) % rainViewerTimestamps.length);
         }, 30000);
@@ -305,14 +314,6 @@ export default function LiveMap() {
         }
     }, [animationPosition]);
 
-    // Désactiver RainViewer quand la météo est désactivée
-    useEffect(() => {
-        if (!weatherEnabled) {
-            setRainViewerEnabled(false);
-            setShowWindMarkers(false);
-        }
-    }, [weatherEnabled]);
-
     // Mettre à jour la météo périodiquement
     useEffect(() => {
         if (!showWindMarkers) {
@@ -321,7 +322,7 @@ export default function LiveMap() {
         }
 
         fetchWeatherForPlanes();
-        const interval = setInterval(fetchWeatherForPlanes, 300000); // Toutes les 5 minutes
+        const interval = setInterval(fetchWeatherForPlanes, 300000);
         return () => clearInterval(interval);
     }, [showWindMarkers, planes]);
 
@@ -362,9 +363,11 @@ export default function LiveMap() {
             }).addTo(map.current);
 
             setMapLoaded(true);
+            console.log('🗺️ Map loaded');
 
             const ws = new WebSocket('wss://msfs-backend-production.up.railway.app');
             ws.onopen = () => {
+                console.log('✅ Connected to server');
                 setConnected(true);
                 ws.send(JSON.stringify({ type: 'web_connect' }));
             };
@@ -409,6 +412,7 @@ export default function LiveMap() {
             };
 
             ws.onclose = () => {
+                console.log('❌ Disconnected');
                 setConnected(false);
             };
 
@@ -602,14 +606,53 @@ export default function LiveMap() {
         <div className="relative w-full h-screen">
             <div ref={mapContainer} className="w-full h-full" />
 
-            {/* Panneau principal */}
-            <div className="absolute top-4 left-4 bg-black/80 text-white p-4 rounded-lg backdrop-blur-sm z-[1000]">
-                <h2 className="text-xl font-bold mb-2">🌍 MSFS Live Map</h2>
+            {/* Overlay pour fermer les panneaux sur mobile */}
+            {(showControls || showPilotsList) && (
+                <div 
+                    className="md:hidden fixed inset-0 bg-black/50 z-[999]"
+                    onClick={() => {
+                        setShowControls(false);
+                        setShowPilotsList(false);
+                    }}
+                />
+            )}
+
+            {/* Boutons flottants pour mobile */}
+            <div className="md:hidden absolute top-4 left-4 flex gap-2 z-[1100]">
+                <button
+                    onClick={() => setShowControls(!showControls)}
+                    className="bg-black/90 backdrop-blur-sm text-white p-3 rounded-full shadow-lg hover:bg-black"
+                >
+                    ⚙️
+                </button>
+                <button
+                    onClick={() => setShowPilotsList(!showPilotsList)}
+                    className="bg-black/90 backdrop-blur-sm text-white px-4 py-3 rounded-full shadow-lg hover:bg-black flex items-center gap-2"
+                >
+                    ✈️ <span className="font-bold">{playerCount}</span>
+                </button>
+            </div>
+
+            {/* Panneau de contrôle - Desktop: toujours visible, Mobile: repliable */}
+            <div className={`absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1000] transition-all duration-300 ease-in-out
+                ${showControls ? 'top-18 left-4 opacity-100 p-4' : 'top-18 -left-full opacity-0 p-0'}
+                md:top-4 md:left-4 md:opacity-100 md:p-4
+                w-[85vw] md:w-auto max-w-sm
+            `}>
+                <div className="flex justify-between items-center mb-2">
+                    <h2 className="text-lg md:text-xl font-bold">🌍 MSFS Live Map</h2>
+                    <button 
+                        onClick={() => setShowControls(false)}
+                        className="md:hidden text-2xl hover:text-gray-300"
+                    >
+                        ✕
+                    </button>
+                </div>
                 <div className="flex items-center gap-2">
                     <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                    <span>{connected ? 'Connecté' : 'Déconnecté'}</span>
+                    <span className="text-sm md:text-base">{connected ? 'Connecté' : 'Déconnecté'}</span>
                 </div>
-                <div className="mt-2">
+                <div className="mt-2 text-sm md:text-base">
                     <strong>{playerCount}</strong> pilote{playerCount > 1 ? 's' : ''} en ligne
                 </div>
                 {mapLoaded && <div className="text-xs text-green-400 mt-1">✅ Carte chargée</div>}
@@ -618,7 +661,7 @@ export default function LiveMap() {
                 <div className="mt-4 pt-4 border-t border-gray-700 space-y-2 grid grid-cols-1">
                     <button
                         onClick={() => setWeatherEnabled(!weatherEnabled)}
-                        className={`w-full px-4 py-2 rounded-lg transition font-semibold ${weatherEnabled
+                        className={`w-full px-4 py-2 rounded-lg transition font-semibold text-sm md:text-base ${weatherEnabled
                             ? 'bg-green-600 hover:bg-green-700'
                             : 'bg-gray-600 hover:bg-gray-700'
                             }`}
@@ -630,7 +673,7 @@ export default function LiveMap() {
                         <>
                             <button
                                 onClick={() => setRainViewerEnabled(!rainViewerEnabled)}
-                                className={`w-full px-3 py-2 rounded text-sm font-semibold transition ${rainViewerEnabled
+                                className={`w-full px-3 py-2 rounded text-xs md:text-sm font-semibold transition ${rainViewerEnabled
                                     ? 'bg-purple-600 hover:bg-purple-700 text-white'
                                     : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
                                     }`}
@@ -640,41 +683,62 @@ export default function LiveMap() {
 
                             <button
                                 onClick={() => setShowWindMarkers(!showWindMarkers)}
-                                className={`w-full px-3 py-2 rounded text-sm font-semibold transition ${showWindMarkers
+                                className={`w-full px-3 py-2 rounded text-xs md:text-sm font-semibold transition ${showWindMarkers
                                     ? 'bg-emerald-600 hover:bg-emerald-700'
                                     : 'bg-gray-700 hover:bg-gray-600'
                                     }`}
                             >
                                 {showWindMarkers ? '💨 Vent: ON' : '💨 Vent: OFF'}
                             </button>
+
+                            <div className="text-xs text-green-400 mt-2 text-center">
+                                ✅ 100% gratuit & illimité
+                            </div>
                         </>
                     )}
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-gray-700">
-                    <a href="/download/MSFS-TRACKER.exe" className="bg-blue-600 text-white px-4 py-2 rounded-lg block text-center hover:bg-blue-700 transition" download="MSFS-TRACKER.exe">
-                        📥 Télécharger le client
+                    <a href="/download/MSFS-TRACKER.exe" className="bg-blue-600 text-white px-4 py-2 rounded-lg block text-center hover:bg-blue-700 transition text-sm md:text-base" download="MSFS-TRACKER.exe">
+                        📥 Télécharger
                     </a>
                 </div>
             </div>
 
-            {/* Liste des pilotes */}
-            <div className="absolute top-4 right-4 bg-black/80 text-white p-4 rounded-lg max-h-96 overflow-y-auto backdrop-blur-sm z-[1000]">
-                <h3 className="font-bold mb-2">✈️ Pilotes actifs</h3>
+            {/* Liste des pilotes - Desktop: toujours visible, Mobile: repliable */}
+            <div className={`absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1000] transition-all duration-300 ease-in-out overflow-y-auto
+                ${showPilotsList ? 'top-4 right-4 opacity-100 p-4' : 'top-4 -right-full opacity-0 p-0'}
+                md:top-4 md:right-4 md:opacity-100 md:p-4
+                w-[85vw] md:w-auto max-w-sm
+                max-h-[70vh] md:max-h-96
+            `}>
+                <div className="flex justify-between items-center mb-2 sticky top-0 bg-black/80 pb-2">
+                    <h3 className="font-bold text-sm md:text-base">✈️ Pilotes actifs</h3>
+                    <button 
+                        onClick={() => setShowPilotsList(false)}
+                        className="md:hidden text-2xl hover:text-gray-300"
+                    >
+                        ✕
+                    </button>
+                </div>
                 {planes.size === 0 ? (
-                    <div className="text-gray-400 text-sm">Aucun pilote en vol</div>
+                    <div className="text-gray-400 text-xs md:text-sm">Aucun pilote en vol</div>
                 ) : (
                     Array.from(planes.values()).map(plane => {
                         const weather = weatherData.get(plane.userId);
                         return (
                             <div
                                 key={plane.userId}
-                                className="mb-2 text-sm border-b border-gray-700 pb-2 cursor-pointer hover:bg-white/10 px-2 py-1 rounded transition"
+                                className="mb-2 text-xs md:text-sm border-b border-gray-700 pb-2 cursor-pointer hover:bg-white/10 px-2 py-1 rounded transition"
                                 onClick={() => {
                                     if (map.current) {
                                         map.current.flyTo([plane.latitude, plane.longitude], 10, {
                                             duration: 2
                                         });
+                                        // Fermer le panneau sur mobile après sélection
+                                        if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                                            setShowPilotsList(false);
+                                        }
                                     }
                                 }}
                             >
@@ -697,26 +761,26 @@ export default function LiveMap() {
                 )}
             </div>
 
-            {/* Légende */}
-            <div className="absolute bottom-4 left-4 bg-black/80 text-white p-3 rounded-lg backdrop-blur-sm text-sm z-[1000]">
-                <div className="flex items-center gap-2 mb-1">
-                    <div className="w-8 h-0.5 bg-[#00d4ff]"></div>
-                    <span>Traînée de vol</span>
+            {/* Légende - toujours visible mais plus compacte sur mobile */}
+            <div className="absolute bottom-4 left-4 bg-black/80 text-white p-2 md:p-3 rounded-lg backdrop-blur-sm text-xs md:text-sm z-[1000] max-w-[90vw]">
+                <div className="flex items-center gap-1 md:gap-2 mb-1">
+                    <div className="w-6 md:w-8 h-0.5 bg-[#00d4ff]"></div>
+                    <span className="whitespace-nowrap">Traînée</span>
                 </div>
-                <div className="flex items-center gap-2 mb-1">
-                    <img src="/plane.png" style={{ width: '20px', height: '20px', transform: 'rotate(0deg)' }} alt="plane" />
-                    <span>Avion</span>
+                <div className="flex items-center gap-1 md:gap-2 mb-1">
+                    <img src="/plane.png" className="w-4 h-4 md:w-5 md:h-5" alt="plane" />
+                    <span className="whitespace-nowrap">Avion</span>
                 </div>
                 {rainViewerEnabled && (
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-1 md:gap-2 mb-1">
                         <div className="w-4 h-4 bg-linear-to-r from-blue-400 via-yellow-400 to-red-400 rounded"></div>
-                        <span>Pluie</span>
+                        <span className="whitespace-nowrap">Pluie</span>
                     </div>
                 )}
                 {showWindMarkers && (
-                    <div className="flex items-center gap-2">
-                        <div style={{ fontSize: '18px', color: '#00ff88' }}>➤</div>
-                        <span>Vent</span>
+                    <div className="flex items-center gap-1 md:gap-2">
+                        <div style={{ fontSize: '16px', color: '#00ff88' }} className="md:text-lg">➤</div>
+                        <span className="whitespace-nowrap">Vent</span>
                     </div>
                 )}
             </div>
