@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@tailwind components;
+@tailwind utilities;
 
 :root {
   --background: #ffffff;
@@ -24,3 +26,39 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.animate-fadeIn {
+    animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideUp {
+    animation: slideUp 0.3s ease-out;
+}
+
+/* Hiérarchie des z-index */
+.z-map { z-index: 0; }
+.z-ui { z-index: 40; }
+.z-dropdown { z-index: 59; }
+.z-overlay { z-index: 58; }
+.z-modal { z-index: 60; }
+.z-notification { z-index: 61; }

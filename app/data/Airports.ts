@@ -35,6 +35,16 @@ export const AIRPORTS: Airport[] = [
     "elevation": 28
   },
   {
+    "icao": "LFAY",
+    "iata": "QAM",
+    "name": "Aérodrome d’Amiens-Glisy",
+    "city": "Amiens / Glisy",
+    "country": "FR",
+    "lat": 49.8730,
+    "lon": 2.3871,
+    "elevation": 63
+  },
+  {
     "icao": "AGGM",
     "iata": "MUA",
     "name": "Munda Airport",

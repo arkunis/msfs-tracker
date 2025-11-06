@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MSFS TRACKER",
-  description: "Suivez votre trajet en temps réel avec MSFS TRACKER",
+  title: "AeroQuest",
+  description: "La simulation prend vie : volez, gagnez de l’argent in-app et développez votre compagnie aérienne sur AeroQuest.",
 };
 
 export default function RootLayout({

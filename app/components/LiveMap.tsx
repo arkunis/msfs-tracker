@@ -1,35 +1,15 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
+import { Plane, WeatherData } from '../interfaces/LiveMap';
+import { createClient } from '@supabase/supabase-js';
+import NotificationBell from './NotificationBell';
 
-// Importer Leaflet dynamiquement pour éviter l'erreur "window is not defined"
 let L: any;
 
-interface Plane {
-    userId: string;
-    username: string;
-    latitude: number;
-    longitude: number;
-    altitude: number;
-    heading: number; // En radians
-    speed: number;
-    aircraft: string;
-}
-
-interface WeatherData {
-    wind: {
-        speed: number; // knots
-        deg: number; // degrés
-        gusts: number; // rafales
-    };
-    main: {
-        temp: number; // °C
-        pressure: number; // hPa
-        humidity: number; // %
-        feels_like: number; // température ressentie
-    };
-    precipitation: number; // mm
-    weather_code: number; // code WMO
-}
+const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export default function LiveMap() {
     const mapContainer = useRef<HTMLDivElement>(null);
@@ -42,37 +22,87 @@ export default function LiveMap() {
     const [playerCount, setPlayerCount] = useState(0);
     const [mapLoaded, setMapLoaded] = useState(false);
 
-    // États pour la météo
+    // Authentification
+    const [user, setUser] = useState<any>(null);
+    const [userProfile, setUserProfile] = useState<any>(null);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+
     const [weatherEnabled, setWeatherEnabled] = useState(false);
     const [showWindMarkers, setShowWindMarkers] = useState(false);
     const [weatherData, setWeatherData] = useState<Map<string, WeatherData>>(new Map());
     const weatherMarkers = useRef<Map<string, any>>(new Map());
 
-    // RainViewer
     const [rainViewerEnabled, setRainViewerEnabled] = useState(false);
     const rainViewerLayers = useRef<any[]>([]);
     const [animationPosition, setAnimationPosition] = useState(0);
     const [rainViewerTimestamps, setRainViewerTimestamps] = useState<any[]>([]);
     const animationTimer = useRef<any>(null);
 
-    // États pour mobile
     const [showControls, setShowControls] = useState(false);
     const [showPilotsList, setShowPilotsList] = useState(false);
+    const [showAuthPanel, setShowAuthPanel] = useState(false);
 
     const radToDeg = (rad: number) => rad * (180 / Math.PI);
 
-    // Charger les timestamps RainViewer
+    // Vérifier l'authentification au chargement
+    useEffect(() => {
+        checkAuth();
+
+        const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+            if (session?.user) {
+                setUser(session.user);
+                setIsAuthenticated(true);
+                loadUserProfile(session.user.id);
+            } else {
+                setUser(null);
+                setIsAuthenticated(false);
+                setUserProfile(null);
+            }
+        });
+
+        return () => {
+            authListener.subscription.unsubscribe();
+        };
+    }, []);
+
+    const checkAuth = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+            setUser(session.user);
+            setIsAuthenticated(true);
+            loadUserProfile(session.user.id);
+        }
+    };
+
+    const loadUserProfile = async (userId: string) => {
+        const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', userId)
+            .single();
+
+        if (!error && data) {
+            setUserProfile(data);
+        }
+    };
+
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
+        setUser(null);
+        setIsAuthenticated(false);
+        setUserProfile(null);
+        setWeatherEnabled(false);
+        setShowWindMarkers(false);
+        setRainViewerEnabled(false);
+    };
+
     const loadRainViewerTimestamps = async () => {
         try {
-            console.log('🌧️ Chargement des données RainViewer...');
             const response = await fetch('https://api.rainviewer.com/public/weather-maps.json');
             const data = await response.json();
-
             const timestamps = data.radar.past.concat(data.radar.nowcast);
-            console.log('✅ RainViewer timestamps chargés:', timestamps.length, 'frames');
             setRainViewerTimestamps(timestamps);
             setAnimationPosition(0);
-
             return timestamps;
         } catch (error) {
             console.error('❌ Erreur RainViewer:', error);
@@ -80,7 +110,6 @@ export default function LiveMap() {
         }
     };
 
-    // Ajouter/mettre à jour la couche RainViewer
     const updateRainViewerLayer = () => {
         if (!map.current || !rainViewerEnabled || rainViewerTimestamps.length === 0) return;
 
@@ -107,7 +136,6 @@ export default function LiveMap() {
         rainViewerLayers.current.push(layer);
     };
 
-    // Nettoyer les couches RainViewer
     const clearRainViewerLayers = () => {
         rainViewerLayers.current.forEach(layer => {
             if (map.current) {
@@ -117,7 +145,6 @@ export default function LiveMap() {
         rainViewerLayers.current = [];
     };
 
-    // Fonction pour récupérer la météo autour des avions avec Open-Meteo
     const fetchWeatherForPlanes = async () => {
         if (!showWindMarkers || planes.size === 0) return;
 
@@ -164,7 +191,6 @@ export default function LiveMap() {
         }
     };
 
-    // Créer ou mettre à jour un marqueur météo
     const updateWeatherMarker = (lat: number, lon: number, weather: WeatherData, id: string) => {
         if (!map.current || !showWindMarkers) return;
 
@@ -241,7 +267,6 @@ export default function LiveMap() {
         }
     };
 
-    // Nettoyer les marqueurs météo
     const clearWeatherMarkers = () => {
         weatherMarkers.current.forEach(marker => {
             if (map.current) {
@@ -252,7 +277,6 @@ export default function LiveMap() {
         setWeatherData(new Map());
     };
 
-    // Désactiver RainViewer quand la météo est désactivée
     useEffect(() => {
         if (!weatherEnabled) {
             setRainViewerEnabled(false);
@@ -260,7 +284,6 @@ export default function LiveMap() {
         }
     }, [weatherEnabled]);
 
-    // Charger les timestamps RainViewer au démarrage
     useEffect(() => {
         if (!rainViewerEnabled || !mapLoaded) {
             clearRainViewerLayers();
@@ -285,7 +308,6 @@ export default function LiveMap() {
         };
     }, [rainViewerEnabled, mapLoaded]);
 
-    // Animer RainViewer
     useEffect(() => {
         if (!rainViewerEnabled || rainViewerTimestamps.length === 0) return;
 
@@ -307,14 +329,12 @@ export default function LiveMap() {
         };
     }, [rainViewerEnabled, rainViewerTimestamps]);
 
-    // Mettre à jour la couche quand la position change
     useEffect(() => {
         if (rainViewerEnabled && rainViewerTimestamps.length > 0) {
             updateRainViewerLayer();
         }
     }, [animationPosition]);
 
-    // Mettre à jour la météo périodiquement
     useEffect(() => {
         if (!showWindMarkers) {
             clearWeatherMarkers();
@@ -327,7 +347,6 @@ export default function LiveMap() {
     }, [showWindMarkers, planes]);
 
     useEffect(() => {
-
         const initMap = async () => {
             if (map.current || !mapContainer.current) return;
 
@@ -363,11 +382,9 @@ export default function LiveMap() {
             }).addTo(map.current);
 
             setMapLoaded(true);
-            console.log('🗺️ Map loaded');
 
             const ws = new WebSocket('wss://msfs-backend-production.up.railway.app');
             ws.onopen = () => {
-                console.log('✅ Connected to server');
                 setConnected(true);
                 ws.send(JSON.stringify({ type: 'web_connect' }));
             };
@@ -412,7 +429,6 @@ export default function LiveMap() {
             };
 
             ws.onclose = () => {
-                console.log('❌ Disconnected');
                 setConnected(false);
             };
 
@@ -468,7 +484,6 @@ export default function LiveMap() {
 
         let marker = markers.current.get(plane.userId);
         if (!marker) {
-
             const planeIcon = L.divIcon({
                 className: 'plane-marker',
                 html: `
@@ -607,17 +622,18 @@ export default function LiveMap() {
             <div ref={mapContainer} className="w-full h-full" />
 
             {/* Overlay pour fermer les panneaux sur mobile */}
-            {(showControls || showPilotsList) && (
-                <div 
+            {(showControls || showPilotsList || showAuthPanel) && (
+                <div
                     className="md:hidden fixed inset-0 bg-black/50 z-[999]"
                     onClick={() => {
                         setShowControls(false);
                         setShowPilotsList(false);
+                        setShowAuthPanel(false);
                     }}
                 />
             )}
 
-            {/* Boutons flottants pour mobile */}
+            {/* Boutons mobile */}
             <div className="md:hidden absolute top-4 left-4 flex gap-2 z-[1100]">
                 <button
                     onClick={() => setShowControls(!showControls)}
@@ -631,90 +647,186 @@ export default function LiveMap() {
                 >
                     ✈️ <span className="font-bold">{playerCount}</span>
                 </button>
+                {isAuthenticated && user && (
+                    <div className="bg-black/90 backdrop-blur-sm rounded-full shadow-lg px-2">
+                        <NotificationBell userId={user.id} />
+                    </div>
+                )}
+                <button
+                    onClick={() => setShowAuthPanel(!showAuthPanel)}
+                    className="bg-black/90 backdrop-blur-sm text-white p-3 rounded-full shadow-lg hover:bg-black"
+                >
+                    {isAuthenticated ? '👤' : '🔒'}
+                </button>
             </div>
 
-            {/* Panneau de contrôle - Desktop: toujours visible, Mobile: repliable */}
-            <div className={`absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1000] transition-all duration-300 ease-in-out
+            {/* Panel de contrôle principal */}
+            <div className={`absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1020] transition-all duration-300 ease-in-out
                 ${showControls ? 'top-18 left-4 opacity-100 p-4' : 'top-18 -left-full opacity-0 p-0'}
                 md:top-4 md:left-4 md:opacity-100 md:p-4
-                w-[85vw] md:w-auto max-w-sm
+                w-[85vw] md:w-[300px] max-w-sm
             `}>
                 <div className="flex justify-between items-center mb-2">
-                    <h2 className="text-lg md:text-xl font-bold">🌍 MSFS Live Map</h2>
-                    <button 
+                    <h2 className="text-lg md:text-xl font-bold">🌍 AeroQuest Live Map</h2>
+                    <button
                         onClick={() => setShowControls(false)}
                         className="md:hidden text-2xl hover:text-gray-300"
                     >
                         ✕
                     </button>
                 </div>
-                <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                    <span className="text-sm md:text-base">{connected ? 'Connecté' : 'Déconnecté'}</span>
+                <div className='flex justify-between'>
+                    <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                        <span className="text-sm md:text-base">{connected ? 'Connecté' : 'Déconnecté'}</span>
+                    </div>
+                    {isAuthenticated && user && (
+                        <div className="px-2">
+                            <NotificationBell userId={user.id} />
+                        </div>
+                    )}
                 </div>
                 <div className="mt-2 text-sm md:text-base">
                     <strong>{playerCount}</strong> pilote{playerCount > 1 ? 's' : ''} en ligne
                 </div>
                 {mapLoaded && <div className="text-xs text-green-400 mt-1">✅ Carte chargée</div>}
 
-                {/* Contrôles météo simplifiés */}
-                <div className="mt-4 pt-4 border-t border-gray-700 space-y-2 grid grid-cols-1">
-                    <button
-                        onClick={() => setWeatherEnabled(!weatherEnabled)}
-                        className={`w-full px-4 py-2 rounded-lg transition font-semibold text-sm md:text-base ${weatherEnabled
-                            ? 'bg-green-600 hover:bg-green-700'
-                            : 'bg-gray-600 hover:bg-gray-700'
-                            }`}
-                    >
-                        {weatherEnabled ? '🌦️ Météo: ON' : '🌦️ Météo: OFF'}
-                    </button>
-
-                    {weatherEnabled && (
+                {/* Options météo - Nécessite authentification */}
+                <div className="mt-4 pt-4 border-t border-gray-700 space-y-2">
+                    {!isAuthenticated ? (
+                        <div className="bg-blue-500/20 border border-blue-500 rounded-lg p-4 text-center">
+                            <p className="text-sm mb-3">🔒 Fonctionnalités météo réservées aux membres</p>
+                            <div className="flex flex-col gap-2">
+                                <a
+                                    href="/auth/login"
+                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-3 rounded text-sm transition"
+                                >
+                                    Connexion
+                                </a>
+                                <a
+                                    href="/auth/register"
+                                    className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-3 rounded text-sm transition"
+                                >
+                                    Inscription
+                                </a>
+                            </div>
+                        </div>
+                    ) : (
                         <>
                             <button
-                                onClick={() => setRainViewerEnabled(!rainViewerEnabled)}
-                                className={`w-full px-3 py-2 rounded text-xs md:text-sm font-semibold transition ${rainViewerEnabled
-                                    ? 'bg-purple-600 hover:bg-purple-700 text-white'
-                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                                onClick={() => setWeatherEnabled(!weatherEnabled)}
+                                className={`w-full px-4 py-2 rounded-lg transition font-semibold text-sm md:text-base ${weatherEnabled
+                                    ? 'bg-green-600 hover:bg-green-700'
+                                    : 'bg-gray-600 hover:bg-gray-700'
                                     }`}
                             >
-                                {rainViewerEnabled ? '🌧️ Radar pluie: ON' : '🌧️ Radar pluie: OFF'}
+                                {weatherEnabled ? '🌦️ Météo: ON' : '🌦️ Météo: OFF'}
                             </button>
 
-                            <button
-                                onClick={() => setShowWindMarkers(!showWindMarkers)}
-                                className={`w-full px-3 py-2 rounded text-xs md:text-sm font-semibold transition ${showWindMarkers
-                                    ? 'bg-emerald-600 hover:bg-emerald-700'
-                                    : 'bg-gray-700 hover:bg-gray-600'
-                                    }`}
-                            >
-                                {showWindMarkers ? '💨 Vent: ON' : '💨 Vent: OFF'}
-                            </button>
+                            {weatherEnabled && (
+                                <>
+                                    <button
+                                        onClick={() => setRainViewerEnabled(!rainViewerEnabled)}
+                                        className={`w-full px-3 py-2 rounded text-xs md:text-sm font-semibold transition ${rainViewerEnabled
+                                            ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                                            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                                            }`}
+                                    >
+                                        {rainViewerEnabled ? '🌧️ Radar pluie: ON' : '🌧️ Radar pluie: OFF'}
+                                    </button>
 
-                            <div className="text-xs text-green-400 mt-2 text-center">
-                                ✅ 100% gratuit & illimité
-                            </div>
+                                    <button
+                                        onClick={() => setShowWindMarkers(!showWindMarkers)}
+                                        className={`w-full px-3 py-2 rounded text-xs md:text-sm font-semibold transition ${showWindMarkers
+                                            ? 'bg-emerald-600 hover:bg-emerald-700'
+                                            : 'bg-gray-700 hover:bg-gray-600'
+                                            }`}
+                                    >
+                                        {showWindMarkers ? '💨 Vent: ON' : '💨 Vent: OFF'}
+                                    </button>
+                                </>
+                            )}
                         </>
                     )}
                 </div>
 
+                {/* Télécharger le launcher - Toujours accessible */}
                 <div className="mt-4 pt-4 border-t border-gray-700">
-                    <a href="/download/MSFS-TRACKER.exe" className="bg-blue-600 text-white px-4 py-2 rounded-lg block text-center hover:bg-blue-700 transition text-sm md:text-base" download="MSFS-TRACKER.exe">
-                        📥 Télécharger
+                    <a
+                        href="/download/MSFS-TRACKER.exe"
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg block text-center hover:bg-blue-700 transition text-sm md:text-base"
+                        download="MSFS-TRACKER.exe"
+                    >
+                        📥 Télécharger le launcher
                     </a>
                 </div>
             </div>
 
-            {/* Liste des pilotes - Desktop: toujours visible, Mobile: repliable */}
-            <div className={`absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1000] transition-all duration-300 ease-in-out overflow-y-auto
-                ${showPilotsList ? 'top-4 right-4 opacity-100 p-4' : 'top-4 -right-full opacity-0 p-0'}
-                md:top-4 md:right-4 md:opacity-100 md:p-4
-                w-[85vw] md:w-auto max-w-sm
-                max-h-[70vh] md:max-h-96
+            {/* Panel utilisateur (desktop uniquement) */}
+            <div className={`hidden md:block absolute bottom-4 right-4 bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1000] p-4 w-[280px]
+                ${showAuthPanel ? 'opacity-100' : 'opacity-100'}
             `}>
-                <div className="flex justify-between items-center mb-2 sticky top-0 bg-black/80 pb-2">
+                {!isAuthenticated ? (
+                    <div>
+                        <h3 className="font-bold mb-3 text-center">✈️ Rejoignez-nous</h3>
+                        <div className="space-y-2">
+                            <a
+                                href="/auth/login"
+                                className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded text-center transition"
+                            >
+                                Se connecter
+                            </a>
+                            <a
+                                href="/auth/register"
+                                className="block w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded text-center transition"
+                            >
+                                S'inscrire
+                            </a>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-3 text-center">
+                            Accédez à la météo en temps réel et plus encore !
+                        </p>
+                    </div>
+                ) : (
+                    <div>
+                        <div className="flex items-center gap-3 mb-3 pb-3 border-b border-gray-700">
+                            <div className="w-12 h-12 bg-linear-to-br from-blue-600 to-blue-800 rounded-full flex items-center justify-center text-xl font-bold shadow-lg">
+                                {userProfile?.username?.charAt(0).toUpperCase() || '?'}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="font-bold truncate">{userProfile?.username || 'Pilote'}</p>
+                                <p className="text-xs text-gray-400">{userProfile?.missions_completed || 0} missions complétées</p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <a
+                                href="/dashboard"
+                                className="block w-full bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded text-center transition text-sm font-medium"
+                            >
+                                📊 Dashboard
+                            </a>
+                            <button
+                                onClick={handleLogout}
+                                className="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded text-center transition text-sm font-medium"
+                            >
+                                🚪 Déconnexion
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Liste des pilotes */}
+            <div className={`absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1010] transition-all duration-300 ease-in-out overflow-y-auto
+                ${showPilotsList ? 'top-18 right-4 opacity-100 p-4' : 'top-18 -right-full opacity-0 p-0'}
+                md:top-4 md:right-4 md:opacity-100 md:p-4
+                w-[85vw] md:w-[280px]
+                max-h-[70vh] md:max-h-[calc(100vh-220px)]
+            `}>
+                <div className="flex justify-between items-center mb-2 sticky top-0 pb-2">
                     <h3 className="font-bold text-sm md:text-base">✈️ Pilotes actifs</h3>
-                    <button 
+                    <button
                         onClick={() => setShowPilotsList(false)}
                         className="md:hidden text-2xl hover:text-gray-300"
                     >
@@ -735,7 +847,6 @@ export default function LiveMap() {
                                         map.current.flyTo([plane.latitude, plane.longitude], 10, {
                                             duration: 2
                                         });
-                                        // Fermer le panneau sur mobile après sélection
                                         if (typeof window !== 'undefined' && window.innerWidth < 768) {
                                             setShowPilotsList(false);
                                         }
@@ -761,7 +872,59 @@ export default function LiveMap() {
                 )}
             </div>
 
-            {/* Légende - toujours visible mais plus compacte sur mobile */}
+            {/* Panel auth mobile */}
+            <div className={`md:hidden absolute bg-black/80 text-white rounded-lg backdrop-blur-sm z-[1050] transition-all duration-300 ease-in-out p-4
+                ${showAuthPanel ? 'bottom-4 left-4 right-4 opacity-100' : 'bottom-4 left-4 right-4 opacity-0'}
+            `}>
+                {!isAuthenticated ? (
+                    <div>
+                        <h3 className="font-bold mb-3 text-center">✈️ Rejoignez-nous</h3>
+                        <div className="space-y-2">
+                            <a
+                                href="/auth/login"
+                                className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded text-center transition"
+                            >
+                                Se connecter
+                            </a>
+                            <a
+                                href="/auth/register"
+                                className="block w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded text-center transition"
+                            >
+                                S'inscrire
+                            </a>
+                        </div>
+                    </div>
+                ) : (
+                    <div>
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-xl">
+                                {userProfile?.username?.charAt(0).toUpperCase() || '?'}
+                            </div>
+                            <div className="flex-1">
+                                <p className="font-bold">{userProfile?.username || 'Pilote'}</p>
+                                <p className="text-xs text-gray-400">{userProfile?.missions_completed || 0} missions</p>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <a
+                                href="/dashboard"
+                                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded text-center transition text-sm"
+                            >
+                                📊 Dashboard
+                            </a>
+                            <button
+                                onClick={handleLogout}
+                                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded text-center transition text-sm"
+                            >
+                                🚪 Déconnexion
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Légende */}
             <div className="absolute bottom-4 left-4 bg-black/80 text-white p-2 md:p-3 rounded-lg backdrop-blur-sm text-xs md:text-sm z-[1000] max-w-[90vw]">
                 <div className="flex items-center gap-1 md:gap-2 mb-1">
                     <div className="w-6 md:w-8 h-0.5 bg-[#00d4ff]"></div>

@@ -5,26 +5,8 @@ import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css';
 import '../../utils/leafletConfig';
 import { findNearestAirport, type Airport } from '../../data/Airports';
+import { FlightTrack, FlightSession } from '../../interfaces/History';
 
-interface FlightTrack {
-    id: string;
-    user_id: string;
-    latitude: number;
-    longitude: number;
-    altitude: number;
-    heading: number;
-    speed: number;
-    aircraft: string;
-    timestamp: string;
-}
-
-interface FlightSession {
-    tracks: FlightTrack[];
-    startTime: string;
-    endTime: string;
-    aircraft: string;
-    distance: number;
-}
 
 export default function FlightHistory() {
     const params = useParams();
@@ -142,7 +124,7 @@ export default function FlightHistory() {
     }, [selectedSessionIndex]);
 
     const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-        const R = 6371; // Rayon de la Terre en km
+        const R = 6371;
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLon = (lon2 - lon1) * Math.PI / 180;
         const a =
@@ -159,48 +141,39 @@ export default function FlightHistory() {
         const sessions: FlightSession[] = [];
         let currentSession: FlightTrack[] = [tracks[0]];
 
-        // Paramètres de détection de nouvelle session
-        const MAX_TIME_GAP = 10 * 60 * 1000; // 10 minutes (augmenté)
-        const MAX_TELEPORT_DISTANCE = 50; // 50km - détecte les "téléportations" entre vols
+        const MAX_TIME_GAP = 10 * 60 * 1000;
+        const MAX_TELEPORT_DISTANCE = 50;
 
         for (let i = 1; i < tracks.length; i++) {
             const prev = tracks[i - 1];
             const curr = tracks[i];
 
-            // Calculer l'écart de temps
             const timeDiff = new Date(prev.timestamp).getTime() - new Date(curr.timestamp).getTime();
 
-            // Convertir les coordonnées en lat/lon pour calcul précis
             const prevLat = prev.latitude * (180 / Math.PI);
             const prevLon = prev.longitude * (180 / Math.PI);
             const currLat = curr.latitude * (180 / Math.PI);
             const currLon = curr.longitude * (180 / Math.PI);
 
-            // Calculer la distance réelle en km
             const distance = calculateDistance(prevLat, prevLon, currLat, currLon);
 
-            // Déterminer si c'est une nouvelle session
             let isNewSession = false;
 
-            // 1. Écart de temps trop important
             if (timeDiff > MAX_TIME_GAP) {
                 isNewSession = true;
             }
 
-            // 2. "Téléportation" - distance trop grande entre deux points consécutifs
-            // (indique un changement de lieu de départ)
             if (distance > MAX_TELEPORT_DISTANCE) {
                 isNewSession = true;
             }
 
-            // 3. Changement d'avion
             if (prev.aircraft !== curr.aircraft) {
                 isNewSession = true;
             }
 
             if (isNewSession) {
-                // Sauvegarder la session actuelle
-                if (currentSession.length > 1) { // Au moins 2 points pour faire un vol
+
+                if (currentSession.length > 1) {
                     let totalDistance = 0;
                     for (let j = 0; j < currentSession.length - 1; j++) {
                         const t1 = currentSession[j];
@@ -222,14 +195,12 @@ export default function FlightHistory() {
                     });
                 }
 
-                // Démarrer une nouvelle session
                 currentSession = [curr];
             } else {
                 currentSession.push(curr);
             }
         }
 
-        // Ajouter la dernière session
         if (currentSession.length > 1) {
             let totalDistance = 0;
             for (let j = 0; j < currentSession.length - 1; j++) {
@@ -346,14 +317,12 @@ export default function FlightHistory() {
     return (
         <div className="min-h-screen bg-gray-900 text-white p-8">
             <div className="max-w-7xl mx-auto">
-                {/* Modal de confirmation de partage */}
                 {showShareModal && (
                     <div className="fixed top-4 right-4 bg-green-600 px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in">
                         ✅ Lien copié dans le presse-papier !
                     </div>
                 )}
 
-                {/* Header */}
                 <div className="flex justify-between items-center mb-8">
                     <div>
                         <h1 className="text-4xl font-bold">📊 Historique des vols</h1>
@@ -376,7 +345,6 @@ export default function FlightHistory() {
                     </button>
                 </div>
 
-                {/* Sélection de la session de vol */}
                 {sessions.length > 0 && (
                     <div className="bg-gray-800 rounded-lg p-6 mb-8">
                         <label className="block text-lg font-semibold mb-3">
@@ -447,7 +415,6 @@ export default function FlightHistory() {
                     </div>
                 )}
 
-                {/* Stats */}
                 {sessionTracks.length > 0 && currentSession && (
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
                         <div className="bg-blue-600 rounded-lg p-6">
@@ -473,7 +440,6 @@ export default function FlightHistory() {
                     </div>
                 )}
 
-                {/* Carte */}
                 {loading ? (
                     <div className="bg-gray-800 rounded-lg p-12 text-center">
                         <div className="text-xl">⏳ Chargement...</div>
@@ -533,7 +499,6 @@ export default function FlightHistory() {
                     </div>
                 )}
 
-                {/* Liste détaillée */}
                 {sessionTracks.length > 0 && (
                     <div className="mt-8 bg-gray-800 rounded-lg overflow-hidden">
                         <div className="p-6 border-b border-gray-700 flex justify-between items-center">
@@ -574,7 +539,6 @@ export default function FlightHistory() {
                             </table>
                         </div>
 
-                        {/* Pagination */}
                         {sessionTracks.length > tracksPerPage && (
                             <div className="p-4 border-t border-gray-700 flex justify-between items-center">
                                 <div className="text-gray-400 text-sm">
