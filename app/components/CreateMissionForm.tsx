@@ -21,6 +21,8 @@ function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lo
     return Math.round(R * c);
 }
 
+type AircraftCategory = 'turboprop' | 'regional' | 'narrowbody' | 'widebody' | 'heavy';
+
 const MISSION_TYPES = {
     cargo: {
         name: '📦 Cargo (Fret)',
@@ -172,7 +174,7 @@ export default function CreateMissionForm({ company, onSuccess }: CreateMissionF
         };
 
         // Déterminer automatiquement le type d'avion selon la capacité
-        let aircraft_category = 'turboprop';
+        let aircraft_category: AircraftCategory = 'turboprop';
         if (mission_type === 'passenger') {
             if (passenger_count <= 30) aircraft_category = 'turboprop';
             else if (passenger_count <= 100) aircraft_category = 'regional';
