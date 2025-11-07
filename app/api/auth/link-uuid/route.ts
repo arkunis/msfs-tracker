@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseAdmin } from '../../../lib/supabase-admin';
 
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
     try {
+        const supabase = getSupabaseAdmin();
         const { launcherUuid, userId } = await request.json();
-
+        
         if (!launcherUuid || !userId) {
             return NextResponse.json(
                 { error: 'UUID et userId requis' },
@@ -18,11 +17,15 @@ export async function POST(request: Request) {
         }
 
         // Vérifier si cet UUID n'est pas déjà utilisé par un autre compte
-        const { data: existingUser } = await supabase
+        const { data: existingUser, error: fetchError } = await supabase
             .from('users')
             .select('id, username')
             .eq('launcher_uuid', launcherUuid)
-            .single();
+            .maybeSingle();
+
+        if (fetchError) {
+            console.error('Error fetching user:', fetchError);
+        }
 
         if (existingUser && existingUser.id !== userId) {
             return NextResponse.json(
@@ -38,6 +41,7 @@ export async function POST(request: Request) {
             .eq('id', userId);
 
         if (updateError) {
+            console.error('Error updating user:', updateError);
             return NextResponse.json(
                 { error: 'Erreur lors de la liaison UUID' },
                 { status: 500 }
@@ -48,8 +52,8 @@ export async function POST(request: Request) {
             success: true,
             message: 'UUID lié avec succès'
         });
-
     } catch (error: any) {
+        console.error('Error in link-uuid route:', error);
         return NextResponse.json(
             { error: error.message || 'Erreur serveur' },
             { status: 500 }
