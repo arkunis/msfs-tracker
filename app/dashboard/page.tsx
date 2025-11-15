@@ -1097,7 +1097,7 @@ function StatsTab({ profile }: any) {
                 // Trouver max altitude et speed
                 let maxAltitude = 0;
                 let maxSpeed = 0;
-                tracksData.forEach(track => {
+                tracksData.forEach((track: FlightTrack) => {
                     maxAltitude = Math.max(maxAltitude, track.altitude);
                     maxSpeed = Math.max(maxSpeed, track.speed);
                 });
