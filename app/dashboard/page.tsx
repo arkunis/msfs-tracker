@@ -293,9 +293,6 @@ function OverviewTab({ profile, company, missions }: any) {
                     launcher_uuid_text: profile.launcher_uuid
                 });
 
-            console.log('📊 tracksData:', tracksData);
-            console.log('❌ error:', error);
-
             if (tracksData && tracksData.length > 0) {
                 const sessions = segmentFlights(tracksData);
                 setFlightStats({
@@ -1015,14 +1012,13 @@ function StatsTab({ profile }: any) {
         const sessions: any[] = [];
         let currentSession: any[] = [tracks[0]];
         const MAX_TIME_GAP = 10 * 60 * 1000;
-        const MAX_TELEPORT_DISTANCE = 50;  // ✅ AJOUTÉ
+        const MAX_TELEPORT_DISTANCE = 50;
 
         for (let i = 1; i < tracks.length; i++) {
             const prev = tracks[i - 1];
             const curr = tracks[i];
             const timeDiff = new Date(prev.timestamp).getTime() - new Date(curr.timestamp).getTime();
 
-            // ✅ AJOUTÉ: Calcul de distance pour détecter téléportation
             const prevLat = prev.latitude * (180 / Math.PI);
             const prevLon = prev.longitude * (180 / Math.PI);
             const currLat = curr.latitude * (180 / Math.PI);
@@ -1031,7 +1027,7 @@ function StatsTab({ profile }: any) {
 
             let isNewSession = false;
             if (timeDiff > MAX_TIME_GAP) isNewSession = true;
-            if (distance > MAX_TELEPORT_DISTANCE) isNewSession = true;  // ✅ AJOUTÉ
+            if (distance > MAX_TELEPORT_DISTANCE) isNewSession = true;
             if (prev.aircraft !== curr.aircraft) isNewSession = true;
 
             if (isNewSession) {
@@ -1049,7 +1045,15 @@ function StatsTab({ profile }: any) {
                     }
                     const duration = new Date(currentSession[0].timestamp).getTime() -
                         new Date(currentSession[currentSession.length - 1].timestamp).getTime();
-                    sessions.push({ distance: totalDistance, duration });
+
+                    sessions.push({
+                        distance: totalDistance,
+                        duration,
+                        tracks: currentSession,  // ✅ AJOUTE
+                        aircraft: currentSession[0].aircraft,  // ✅ AJOUTE
+                        startTime: currentSession[currentSession.length - 1].timestamp,  // ✅ AJOUTE
+                        endTime: currentSession[0].timestamp  // ✅ AJOUTE
+                    });
                 }
                 currentSession = [curr];
             } else {
@@ -1071,12 +1075,19 @@ function StatsTab({ profile }: any) {
             }
             const duration = new Date(currentSession[0].timestamp).getTime() -
                 new Date(currentSession[currentSession.length - 1].timestamp).getTime();
-            sessions.push({ distance: totalDistance, duration });
+
+            sessions.push({
+                distance: totalDistance,
+                duration,
+                tracks: currentSession,  // ✅ AJOUTE
+                aircraft: currentSession[0].aircraft,  // ✅ AJOUTE
+                startTime: currentSession[currentSession.length - 1].timestamp,  // ✅ AJOUTE
+                endTime: currentSession[0].timestamp  // ✅ AJOUTE
+            });
         }
 
         return sessions;
     };
-
     const loadAllStats = async () => {
         setLoading(true);
 
@@ -1162,7 +1173,7 @@ function StatsTab({ profile }: any) {
     return (
         <div className="space-y-6">
             <div>
-                <h2 className="text-2xl font-bold mb-4">✈️ Statistiques de vol</h2>
+                <h2 className="text-2xl font-bold mb-4 text-white">✈️ Statistiques de vol</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <div className="bg-black/60 backdrop-blur-lg rounded-2xl p-6 border border-blue-500/30">
                         <h3 className="text-gray-400 mb-2">Sessions de vol</h3>
@@ -1193,7 +1204,7 @@ function StatsTab({ profile }: any) {
             </div>
 
             <div>
-                <h2 className="text-2xl font-bold mb-4">💼 Missions</h2>
+                <h2 className="text-2xl font-bold mb-4 text-white">💼 Missions</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <div className="bg-black/60 backdrop-blur-lg rounded-2xl p-6 border border-green-500/30">
                         <h3 className="text-gray-400 mb-2">Missions complétées</h3>
@@ -1233,7 +1244,7 @@ function StatsTab({ profile }: any) {
                                     <div key={index} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
                                         <div className="flex justify-between items-start mb-2">
                                             <div>
-                                                <p className="font-bold text-lg">✈️ {session.aircraft}</p>
+                                                <p className="font-bold text-lg text-white">✈️ {session.aircraft}</p>
                                                 <p className="text-sm text-gray-400">
                                                     {formatDate(session.startTime)} → {formatDate(session.endTime)}
                                                 </p>
