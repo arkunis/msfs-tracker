@@ -288,11 +288,13 @@ function OverviewTab({ profile, company, missions }: any) {
 
     const loadQuickStats = async () => {
         try {
-            const { data: tracksData } = await supabase
-                .from('flight_tracks')
-                .select('*')
-                .eq('user_id', profile.id)
-                .order('timestamp', { ascending: false });
+            const { data: tracksData, error } = await supabase
+                .rpc('get_user_flight_tracks', {
+                    launcher_uuid_text: profile.launcher_uuid
+                });
+
+            console.log('📊 tracksData:', tracksData);
+            console.log('❌ error:', error);
 
             if (tracksData && tracksData.length > 0) {
                 const sessions = segmentFlights(tracksData);
@@ -325,33 +327,83 @@ function OverviewTab({ profile, company, missions }: any) {
         const sessions: any[] = [];
         let currentSession: any[] = [tracks[0]];
         const MAX_TIME_GAP = 10 * 60 * 1000;
+        const MAX_TELEPORT_DISTANCE = 50;
 
         for (let i = 1; i < tracks.length; i++) {
             const prev = tracks[i - 1];
             const curr = tracks[i];
             const timeDiff = new Date(prev.timestamp).getTime() - new Date(curr.timestamp).getTime();
 
-            if (timeDiff > MAX_TIME_GAP || prev.aircraft !== curr.aircraft) {
+            const prevLat = prev.latitude * (180 / Math.PI);
+            const prevLon = prev.longitude * (180 / Math.PI);
+            const currLat = curr.latitude * (180 / Math.PI);
+            const currLon = curr.longitude * (180 / Math.PI);
+            const distance = calculateDistance(prevLat, prevLon, currLat, currLon);
+
+            let isNewSession = false;
+            if (timeDiff > MAX_TIME_GAP) isNewSession = true;
+            if (distance > MAX_TELEPORT_DISTANCE) isNewSession = true;
+            if (prev.aircraft !== curr.aircraft) isNewSession = true;
+
+            if (isNewSession) {
                 if (currentSession.length > 1) {
                     let totalDistance = 0;
                     for (let j = 0; j < currentSession.length - 1; j++) {
                         const t1 = currentSession[j];
                         const t2 = currentSession[j + 1];
-                        // flight_tracks stocke déjà en degrés, pas besoin de convertir
                         totalDistance += calculateDistance(
-                            t1.latitude, t1.longitude,
-                            t2.latitude, t2.longitude
+                            t1.latitude * (180 / Math.PI),
+                            t1.longitude * (180 / Math.PI),
+                            t2.latitude * (180 / Math.PI),
+                            t2.longitude * (180 / Math.PI)
                         );
                     }
-                    const duration = new Date(currentSession[0].timestamp).getTime() - 
-                                   new Date(currentSession[currentSession.length - 1].timestamp).getTime();
-                    sessions.push({ distance: totalDistance, duration });
+                    const duration = new Date(currentSession[0].timestamp).getTime() -
+                        new Date(currentSession[currentSession.length - 1].timestamp).getTime();
+
+                    // ✅ RETOURNER TOUTES LES PROPRIÉTÉS
+                    sessions.push({
+                        distance: totalDistance,
+                        duration,
+                        tracks: currentSession,
+                        aircraft: currentSession[0].aircraft,
+                        startTime: currentSession[currentSession.length - 1].timestamp,
+                        endTime: currentSession[0].timestamp
+                    });
                 }
                 currentSession = [curr];
             } else {
                 currentSession.push(curr);
             }
         }
+
+        // ✅ NE PAS OUBLIER LA DERNIÈRE SESSION
+        if (currentSession.length > 1) {
+            let totalDistance = 0;
+            for (let j = 0; j < currentSession.length - 1; j++) {
+                const t1 = currentSession[j];
+                const t2 = currentSession[j + 1];
+                totalDistance += calculateDistance(
+                    t1.latitude * (180 / Math.PI),
+                    t1.longitude * (180 / Math.PI),
+                    t2.latitude * (180 / Math.PI),
+                    t2.longitude * (180 / Math.PI)
+                );
+            }
+            const duration = new Date(currentSession[0].timestamp).getTime() -
+                new Date(currentSession[currentSession.length - 1].timestamp).getTime();
+
+            // ✅ RETOURNER TOUTES LES PROPRIÉTÉS
+            sessions.push({
+                distance: totalDistance,
+                duration,
+                tracks: currentSession,
+                aircraft: currentSession[0].aircraft,
+                startTime: currentSession[currentSession.length - 1].timestamp,
+                endTime: currentSession[0].timestamp
+            });
+        }
+
         return sessions;
     };
 
@@ -424,7 +476,7 @@ function OverviewTab({ profile, company, missions }: any) {
     );
 }
 
-// ===== ONGLET MISSIONS ===== (reste identique, je le garde tel quel)
+// ===== ONGLET MISSIONS =====
 function MissionsTab({ availableMissions, userMissions, userId, profile, onMissionAccept, setNotification }: any) {
     const [view, setView] = useState<'available' | 'my' | 'public'>('available');
     const [accepting, setAccepting] = useState(false);
@@ -482,16 +534,10 @@ function MissionsTab({ availableMissions, userMissions, userId, profile, onMissi
     };
 
     const handleAcceptMission = (mission: any) => {
-        if (mission.reward_amount > 0 && profile.sky_credits < mission.reward_amount) {
-            setNotification({
-                show: true,
-                title: '❌ Crédits insuffisants',
-                message: `Vous avez besoin de ${mission.reward_amount.toLocaleString()} SC pour accepter cette mission.\nVotre solde : ${profile.sky_credits.toLocaleString()} SC`,
-                type: 'danger'
-            });
-            return;
-        }
+        // ❌ SUPPRIMÉ: Vérification inutile des crédits
+        // Le pilote reçoit la récompense APRÈS avoir complété la mission, pas avant !
 
+        // Vérifier seulement si une compagnie est requise pour les missions privées
         if (mission.visibility !== 'public' && !company) {
             setNotification({
                 show: true,
@@ -905,9 +951,6 @@ function StatsTab({ profile }: any) {
         endTime: string;
         aircraft: string;
         distance: number;
-        duration: number;
-        maxAltitude: number;
-        maxSpeed: number;
     }
 
     interface FlightStats {
@@ -954,39 +997,59 @@ function StatsTab({ profile }: any) {
         }
     }, [profile]);
 
+    // ✅ COPIÉ EXACTEMENT DE HISTORY
     const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
         const R = 6371;
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLon = (lon2 - lon1) * Math.PI / 180;
-        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
             Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
             Math.sin(dLon / 2) * Math.sin(dLon / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
     };
 
-    const segmentFlights = (tracks: FlightTrack[]): FlightSession[] => {
+    const segmentFlights = (tracks: any[]) => {
         if (tracks.length === 0) return [];
-        const sessions: FlightSession[] = [];
-        let currentSession: FlightTrack[] = [tracks[0]];
+        const sessions: any[] = [];
+        let currentSession: any[] = [tracks[0]];
         const MAX_TIME_GAP = 10 * 60 * 1000;
-        const MAX_TELEPORT_DISTANCE = 50;
+        const MAX_TELEPORT_DISTANCE = 50;  // ✅ AJOUTÉ
 
         for (let i = 1; i < tracks.length; i++) {
             const prev = tracks[i - 1];
             const curr = tracks[i];
             const timeDiff = new Date(prev.timestamp).getTime() - new Date(curr.timestamp).getTime();
-            // flight_tracks stocke déjà en degrés
-            const distance = calculateDistance(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+
+            // ✅ AJOUTÉ: Calcul de distance pour détecter téléportation
+            const prevLat = prev.latitude * (180 / Math.PI);
+            const prevLon = prev.longitude * (180 / Math.PI);
+            const currLat = curr.latitude * (180 / Math.PI);
+            const currLon = curr.longitude * (180 / Math.PI);
+            const distance = calculateDistance(prevLat, prevLon, currLat, currLon);
 
             let isNewSession = false;
             if (timeDiff > MAX_TIME_GAP) isNewSession = true;
-            if (distance > MAX_TELEPORT_DISTANCE) isNewSession = true;
+            if (distance > MAX_TELEPORT_DISTANCE) isNewSession = true;  // ✅ AJOUTÉ
             if (prev.aircraft !== curr.aircraft) isNewSession = true;
 
             if (isNewSession) {
                 if (currentSession.length > 1) {
-                    sessions.push(createSessionStats(currentSession));
+                    let totalDistance = 0;
+                    for (let j = 0; j < currentSession.length - 1; j++) {
+                        const t1 = currentSession[j];
+                        const t2 = currentSession[j + 1];
+                        totalDistance += calculateDistance(
+                            t1.latitude * (180 / Math.PI),
+                            t1.longitude * (180 / Math.PI),
+                            t2.latitude * (180 / Math.PI),
+                            t2.longitude * (180 / Math.PI)
+                        );
+                    }
+                    const duration = new Date(currentSession[0].timestamp).getTime() -
+                        new Date(currentSession[currentSession.length - 1].timestamp).getTime();
+                    sessions.push({ distance: totalDistance, duration });
                 }
                 currentSession = [curr];
             } else {
@@ -995,72 +1058,60 @@ function StatsTab({ profile }: any) {
         }
 
         if (currentSession.length > 1) {
-            sessions.push(createSessionStats(currentSession));
+            let totalDistance = 0;
+            for (let j = 0; j < currentSession.length - 1; j++) {
+                const t1 = currentSession[j];
+                const t2 = currentSession[j + 1];
+                totalDistance += calculateDistance(
+                    t1.latitude * (180 / Math.PI),
+                    t1.longitude * (180 / Math.PI),
+                    t2.latitude * (180 / Math.PI),
+                    t2.longitude * (180 / Math.PI)
+                );
+            }
+            const duration = new Date(currentSession[0].timestamp).getTime() -
+                new Date(currentSession[currentSession.length - 1].timestamp).getTime();
+            sessions.push({ distance: totalDistance, duration });
         }
 
         return sessions;
-    };
-
-    const createSessionStats = (tracks: FlightTrack[]): FlightSession => {
-        let totalDistance = 0;
-        let maxAltitude = 0;
-        let maxSpeed = 0;
-
-        for (let i = 0; i < tracks.length - 1; i++) {
-            const t1 = tracks[i];
-            const t2 = tracks[i + 1];
-
-            // flight_tracks stocke déjà en degrés
-            totalDistance += calculateDistance(
-                t1.latitude, t1.longitude,
-                t2.latitude, t2.longitude
-            );
-
-            maxAltitude = Math.max(maxAltitude, t1.altitude, t2.altitude);
-            maxSpeed = Math.max(maxSpeed, t1.speed, t2.speed);
-        }
-
-        const startTime = tracks[tracks.length - 1].timestamp;
-        const endTime = tracks[0].timestamp;
-        const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
-
-        return {
-            tracks, startTime, endTime,
-            aircraft: tracks[0].aircraft,
-            distance: totalDistance,
-            duration, maxAltitude, maxSpeed
-        };
     };
 
     const loadAllStats = async () => {
         setLoading(true);
 
         try {
-            const { data: tracksData } = await supabase
-                .from('flight_tracks')
-                .select('*')
-                .eq('user_id', profile.id)
-                .order('timestamp', { ascending: false });
+            const { data: tracksData, error } = await supabase
+                .rpc('get_user_flight_tracks', {
+                    launcher_uuid_text: profile.launcher_uuid
+                });
 
             if (tracksData && tracksData.length > 0) {
                 const flightSessions = segmentFlights(tracksData);
                 setSessions(flightSessions);
 
+                // Calculer les stats à partir des sessions
+                const totalDistance = flightSessions.reduce((sum, s) => sum + s.distance, 0);
+                const totalFlightTime = flightSessions.reduce((sum, s) => sum + s.duration, 0);
+
+                // Trouver max altitude et speed
+                let maxAltitude = 0;
+                let maxSpeed = 0;
+                tracksData.forEach(track => {
+                    maxAltitude = Math.max(maxAltitude, track.altitude);
+                    maxSpeed = Math.max(maxSpeed, track.speed);
+                });
+
                 const stats: FlightStats = {
                     totalSessions: flightSessions.length,
-                    totalDistance: flightSessions.reduce((sum, s) => sum + s.distance, 0),
-                    totalFlightTime: flightSessions.reduce((sum, s) => sum + s.duration, 0),
+                    totalDistance: totalDistance,
+                    totalFlightTime: totalFlightTime,
                     totalTracks: tracksData.length,
-                    maxAltitude: Math.max(...flightSessions.map(s => s.maxAltitude)),
-                    maxSpeed: Math.max(...flightSessions.map(s => s.maxSpeed)),
-                    averageDistance: 0,
-                    averageDuration: 0
+                    maxAltitude: maxAltitude,
+                    maxSpeed: maxSpeed,
+                    averageDistance: flightSessions.length > 0 ? totalDistance / flightSessions.length : 0,
+                    averageDuration: flightSessions.length > 0 ? totalFlightTime / flightSessions.length : 0
                 };
-
-                if (flightSessions.length > 0) {
-                    stats.averageDistance = stats.totalDistance / flightSessions.length;
-                    stats.averageDuration = stats.totalFlightTime / flightSessions.length;
-                }
 
                 setFlightStats(stats);
             }
@@ -1170,27 +1221,36 @@ function StatsTab({ profile }: any) {
                 <div className="bg-black/60 backdrop-blur-lg rounded-2xl p-6 border border-blue-500/30">
                     <h3 className="text-xl font-bold text-white mb-4">📊 Dernières sessions de vol</h3>
                     <div className="space-y-3">
-                        {sessions.slice(0, 5).map((session, index) => (
-                            <div key={index} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-                                <div className="flex justify-between items-start mb-2">
-                                    <div>
-                                        <p className="font-bold text-lg">✈️ {session.aircraft}</p>
-                                        <p className="text-sm text-gray-400">
-                                            {formatDate(session.startTime)} → {formatDate(session.endTime)}
-                                        </p>
+                        {sessions
+                            .filter(session => session.tracks && session.tracks.length > 0) // ✅ Filtre
+                            .slice(0, 5)
+                            .map((session, index) => {
+                                const duration = new Date(session.endTime).getTime() - new Date(session.startTime).getTime();
+                                const maxAlt = Math.max(...session.tracks.map(t => t.altitude));
+                                const maxSpd = Math.max(...session.tracks.map(t => t.speed));
+
+                                return (
+                                    <div key={index} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div>
+                                                <p className="font-bold text-lg">✈️ {session.aircraft}</p>
+                                                <p className="text-sm text-gray-400">
+                                                    {formatDate(session.startTime)} → {formatDate(session.endTime)}
+                                                </p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-2xl font-bold text-blue-400">{formatDistance(session.distance)}</p>
+                                                <p className="text-sm text-gray-400">{formatTime(duration)}</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-4 text-sm text-gray-300">
+                                            <span>📏 {session.tracks.length} points</span>
+                                            <span>⛰️ Max: {Math.round(maxAlt)} ft</span>
+                                            <span>⚡ Max: {Math.round(maxSpd)} kts</span>
+                                        </div>
                                     </div>
-                                    <div className="text-right">
-                                        <p className="text-2xl font-bold text-blue-400">{formatDistance(session.distance)}</p>
-                                        <p className="text-sm text-gray-400">{formatTime(session.duration)}</p>
-                                    </div>
-                                </div>
-                                <div className="flex gap-4 text-sm text-gray-300">
-                                    <span>📏 {session.tracks.length} points</span>
-                                    <span>⛰️ Max: {Math.round(session.maxAltitude)} ft</span>
-                                    <span>⚡ Max: {Math.round(session.maxSpeed)} kts</span>
-                                </div>
-                            </div>
-                        ))}
+                                );
+                            })}
                     </div>
                     {sessions.length > 5 && (
                         <p className="text-center text-gray-400 mt-4">+ {sessions.length - 5} autres sessions</p>
